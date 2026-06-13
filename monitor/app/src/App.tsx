@@ -1,32 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Toaster, toast } from 'sonner'
-
-const CONTRACT = '0x31B1A2Add1bc5D15bBE53Ad684aaf86a970ce8AC'
+import { read, write, CONTRACT } from './genlayer'
 
 const BG = '#0B0F1A'
 const CYAN = '#22D3EE'
 
-type Endpoint = { name: string; up: boolean; ms: number }
+type Sla = {
+  key: string
+  service: string
+  promise: string
+  statusUrl: string
+  violated: boolean
+  lastReason: string
+  checks: number
+}
 type Incident = { id: string; sev: 'warn' | 'crit' | 'info'; msg: string; at: string }
 
-const INITIAL_ENDPOINTS: Endpoint[] = [
-  { name: 'api.gateway', up: true, ms: 42 },
-  { name: 'auth.service', up: true, ms: 88 },
-  { name: 'ledger.rpc', up: true, ms: 61 },
-  { name: 'oracle.feed', up: false, ms: 0 },
-  { name: 'cdn.edge', up: true, ms: 24 },
-  { name: 'queue.worker', up: true, ms: 133 },
-  { name: 'db.primary', up: true, ms: 17 },
-  { name: 'webhook.out', up: true, ms: 70 },
-]
-
-const INITIAL_INCIDENTS: Incident[] = [
-  { id: 'i1', sev: 'crit', msg: 'oracle.feed unreachable — SLA breach', at: '20:31:04' },
-  { id: 'i2', sev: 'warn', msg: 'queue.worker latency > 120ms', at: '20:18:55' },
-  { id: 'i3', sev: 'info', msg: 'auth.service auto-recovered', at: '19:57:12' },
-  { id: 'i4', sev: 'warn', msg: 'cdn.edge p99 spike in eu-west', at: '19:44:30' },
-]
+function slaFrom(i: number, s: any): Sla {
+  return {
+    key: String(i),
+    service: String(s?.service ?? `sla.${i}`),
+    promise: String(s?.promise ?? ''),
+    statusUrl: String(s?.status_url ?? ''),
+    violated: Boolean(s?.violated),
+    lastReason: String(s?.last_reason ?? ''),
+    checks: Number(s?.checks ?? 0),
+  }
+}
 
 function Gauge({ value }: { value: number }) {
   const r = 70
@@ -47,7 +48,7 @@ function Gauge({ value }: { value: number }) {
       </svg>
       <div className="absolute text-center">
         <div className="text-4xl font-bold tracking-tight text-white tabular-nums">{value.toFixed(3)}%</div>
-        <div className="mt-1 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">30-day uptime</div>
+        <div className="mt-1 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">SLA compliance</div>
       </div>
     </div>
   )
@@ -93,54 +94,134 @@ function Tile({ className = '', children, label, action }: { className?: string;
 }
 
 function App() {
-  const [endpoints, setEndpoints] = useState(INITIAL_ENDPOINTS)
-  const [incidents, setIncidents] = useState(INITIAL_INCIDENTS)
+  const [slas, setSlas] = useState<Sla[]>([])
+  const [chainStats, setChainStats] = useState({ total_slas: 0, violations: 0 })
+  const [incidents, setIncidents] = useState<Incident[]>([])
   const [latency, setLatency] = useState<number[]>([62, 70, 58, 91, 74, 66, 102, 80, 61, 73, 69, 88])
-  const [checking, setChecking] = useState(false)
-  const [scanning, setScanning] = useState(false)
-  const tick = useRef(0)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [registering, setRegistering] = useState(false)
+  const [checkingKey, setCheckingKey] = useState<string | null>(null)
+  const [form, setForm] = useState({ name: '', promise: '', url: '' })
 
   const uptime = useMemo(() => {
-    const up = endpoints.filter((e) => e.up).length
-    return 99 + (up / endpoints.length)
-  }, [endpoints])
-
-  const avgMs = useMemo(() => {
-    const live = endpoints.filter((e) => e.up)
-    return Math.round(live.reduce((a, b) => a + b.ms, 0) / Math.max(live.length, 1))
-  }, [endpoints])
+    const total = chainStats.total_slas
+    if (!total) return 100
+    return ((total - chainStats.violations) / total) * 100
+  }, [chainStats])
 
   useEffect(() => {
     const t = setInterval(() => {
-      tick.current += 1
       setLatency((prev) => [...prev.slice(1), 50 + Math.round(Math.random() * 80)])
     }, 2200)
     return () => clearInterval(t)
   }, [])
 
-  function checkNow() {
-    setChecking(true)
-    toast.loading('Probing all endpoints…', { id: 'check' })
-    setTimeout(() => {
-      setEndpoints((prev) => prev.map((e) => ({ ...e, ms: e.up ? 15 + Math.round(Math.random() * 130) : 0 })))
-      setChecking(false)
-      toast.success('Health sweep complete', { id: 'check', description: `${endpoints.filter((e) => e.up).length}/${endpoints.length} endpoints healthy` })
-    }, 1200)
+  async function loadSlas(silent = false) {
+    if (!silent) setLoading(true)
+    try {
+      const stats = (await read('stats')) as any
+      const total = Number(stats?.total_slas ?? 0)
+      setChainStats({ total_slas: total, violations: Number(stats?.violations ?? 0) })
+      const loaded: Sla[] = []
+      for (let i = 0; i < total; i++) {
+        try {
+          const s = (await read('get_sla', [String(i)])) as any
+          if (s) loaded.push(slaFrom(i, s))
+        } catch {
+          // skip
+        }
+      }
+      setSlas(loaded)
+      setIncidents(
+        loaded
+          .filter((s) => s.violated)
+          .map((s) => ({
+            id: 'v' + s.key,
+            sev: 'crit' as const,
+            msg: `${s.service} — ${s.lastReason || 'SLA breach detected'}`,
+            at: new Date().toLocaleTimeString('en-GB'),
+          })),
+      )
+    } catch (e: any) {
+      toast.error(`Failed to load SLAs: ${e?.message ?? e}`)
+    } finally {
+      if (!silent) setLoading(false)
+    }
   }
 
-  function addSLA() {
-    setScanning(true)
-    setTimeout(() => {
-      const name = ['svc.alpha', 'svc.beta', 'svc.gamma', 'svc.delta'][Math.floor(Math.random() * 4)] + '.' + Math.floor(Math.random() * 90 + 10)
-      setEndpoints((prev) => [...prev, { name, up: true, ms: 20 + Math.round(Math.random() * 90) }])
-      setScanning(false)
-      toast.success('SLA target registered', { description: name })
-    }, 700)
+  useEffect(() => {
+    loadSlas()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function refresh() {
+    setRefreshing(true)
+    toast.loading('Refreshing from chain…', { id: 'refresh' })
+    try {
+      await loadSlas(true)
+      toast.success('SLA registry synced', { id: 'refresh' })
+    } catch (e: any) {
+      toast.error(`Refresh failed: ${e?.message ?? e}`, { id: 'refresh' })
+    } finally {
+      setRefreshing(false)
+    }
   }
 
-  function recover(name: string) {
-    setEndpoints((prev) => prev.map((e) => (e.name === name ? { ...e, up: !e.up, ms: e.up ? 0 : 50 } : e)))
-    setIncidents((prev) => [{ id: 'n' + Date.now(), sev: 'info', msg: `${name} state toggled`, at: new Date().toLocaleTimeString('en-GB') }, ...prev].slice(0, 8))
+  async function registerSla() {
+    if (!form.name.trim() || !form.promise.trim()) {
+      toast.error('Service name and SLA promise are required.')
+      return
+    }
+    setRegistering(true)
+    const tid = toast.loading('Registering SLA on-chain… (30–60s)')
+    try {
+      await write('register_sla', [form.name.trim(), form.promise.trim(), form.url.trim()])
+      const stats = (await read('stats')) as any
+      toast.success(`SLA target registered · ${Number(stats?.total_slas ?? 0)} total`, { id: tid })
+      setForm({ name: '', promise: '', url: '' })
+      await loadSlas(true)
+    } catch (e: any) {
+      toast.error(`Register failed: ${e?.message ?? e}`, { id: tid })
+    } finally {
+      setRegistering(false)
+    }
+  }
+
+  async function checkViolation(key: string) {
+    setCheckingKey(key)
+    const tid = toast.loading('Evaluating SLA against live status… (30–60s)')
+    try {
+      await write('check_violation', [key])
+      const s = (await read('get_sla', [key])) as any
+      const updated = slaFrom(Number(key), s)
+      setSlas((prev) => prev.map((x) => (x.key === key ? updated : x)))
+      const stats = (await read('stats')) as any
+      setChainStats({
+        total_slas: Number(stats?.total_slas ?? 0),
+        violations: Number(stats?.violations ?? 0),
+      })
+      setIncidents((prev) =>
+        [
+          {
+            id: 'n' + Date.now(),
+            sev: updated.violated ? ('crit' as const) : ('info' as const),
+            msg: `${updated.service} — ${updated.lastReason || (updated.violated ? 'SLA breach' : 'within SLA')}`,
+            at: new Date().toLocaleTimeString('en-GB'),
+          },
+          ...prev,
+        ].slice(0, 8),
+      )
+      if (updated.violated) {
+        toast.error(`${updated.service} VIOLATED — ${updated.lastReason}`, { id: tid })
+      } else {
+        toast.success(`${updated.service} within SLA`, { id: tid })
+      }
+    } catch (e: any) {
+      toast.error(`Check failed: ${e?.message ?? e}`, { id: tid })
+    } finally {
+      setCheckingKey(null)
+    }
   }
 
   return (
@@ -167,7 +248,7 @@ function App() {
           <div className="flex flex-1 flex-col items-center justify-center py-4">
             <Gauge value={Number(uptime.toFixed(3))} />
             <div className="mt-6 grid w-full grid-cols-3 gap-3 text-center">
-              {[['Avg latency', `${avgMs}ms`], ['Endpoints', `${endpoints.length}`], ['Down', `${endpoints.filter((e) => !e.up).length}`]].map(([k, v]) => (
+              {[['Avg latency', `${latency[latency.length - 1]}ms`], ['SLAs', `${chainStats.total_slas}`], ['Violations', `${chainStats.violations}`]].map(([k, v]) => (
                 <div key={k} className="rounded-xl border border-white/5 bg-black/20 py-3">
                   <div className="text-xl font-bold text-white tabular-nums">{v}</div>
                   <div className="text-[10px] uppercase tracking-wider text-slate-500">{k}</div>
@@ -178,22 +259,30 @@ function App() {
         </Tile>
 
         {/* Status dots */}
-        <Tile className="sm:col-span-2" label="Endpoint Status" action={<span className="text-[10px] text-slate-500">tap to toggle</span>}>
-          <div className="grid grid-cols-4 gap-2.5">
-            {endpoints.map((e) => (
-              <button
-                key={e.name}
-                onClick={() => recover(e.name)}
-                className="group flex flex-col items-start gap-1 rounded-xl border border-white/5 bg-black/20 p-2.5 text-left transition hover:border-white/20"
-              >
-                <span className="flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full" style={{ background: e.up ? '#34D399' : '#F43F5E', boxShadow: `0 0 8px ${e.up ? '#34D399' : '#F43F5E'}` }} />
-                  <span className="font-mono text-[11px] text-slate-300">{e.name}</span>
-                </span>
-                <span className="text-[10px] tabular-nums text-slate-500">{e.up ? `${e.ms}ms` : 'offline'}</span>
-              </button>
-            ))}
-          </div>
+        <Tile className="sm:col-span-2" label="SLA Status" action={<span className="text-[10px] text-slate-500">tap to check</span>}>
+          {loading ? (
+            <p className="py-6 text-center text-sm text-slate-500">Loading SLAs from chain…</p>
+          ) : slas.length === 0 ? (
+            <p className="py-6 text-center text-sm text-slate-600">No SLAs registered yet.</p>
+          ) : (
+            <div className="grid grid-cols-4 gap-2.5">
+              {slas.map((s) => (
+                <button
+                  key={s.key}
+                  onClick={() => checkViolation(s.key)}
+                  disabled={checkingKey === s.key}
+                  title={s.promise}
+                  className="group flex flex-col items-start gap-1 rounded-xl border border-white/5 bg-black/20 p-2.5 text-left transition hover:border-white/20 disabled:opacity-50"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full" style={{ background: s.violated ? '#F43F5E' : '#34D399', boxShadow: `0 0 8px ${s.violated ? '#F43F5E' : '#34D399'}` }} />
+                    <span className="font-mono text-[11px] text-slate-300">{s.service}</span>
+                  </span>
+                  <span className="text-[10px] tabular-nums text-slate-500">{checkingKey === s.key ? 'checking…' : s.violated ? 'violated' : `${s.checks} checks`}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </Tile>
 
         {/* Latency sparkline */}
@@ -207,35 +296,51 @@ function App() {
           </div>
         </Tile>
 
-        {/* Add SLA action */}
-        <Tile className="flex flex-col justify-between">
-          <div>
-            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">New target</span>
-            <p className="mt-2 text-sm text-slate-400">Register an endpoint to monitor against an SLA contract.</p>
+        {/* Register SLA action */}
+        <Tile className="flex flex-col justify-between" label="New target">
+          <div className="space-y-2">
+            <input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="Service name"
+              className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-white/30"
+            />
+            <input
+              value={form.promise}
+              onChange={(e) => setForm({ ...form, promise: e.target.value })}
+              placeholder="SLA promise (e.g. 99.9% uptime)"
+              className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-white/30"
+            />
+            <input
+              value={form.url}
+              onChange={(e) => setForm({ ...form, url: e.target.value })}
+              placeholder="Status URL"
+              className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-white/30"
+            />
           </div>
           <button
-            onClick={addSLA}
-            disabled={scanning}
-            className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-dashed py-3 text-sm font-semibold transition disabled:opacity-50"
+            onClick={registerSla}
+            disabled={registering}
+            className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-dashed py-3 text-sm font-semibold transition disabled:opacity-50"
             style={{ borderColor: CYAN + '66', color: CYAN }}
           >
-            {scanning ? 'Provisioning…' : '+ Add SLA'}
+            {registering ? 'Registering…' : '+ Register SLA'}
           </button>
         </Tile>
 
-        {/* Check now action */}
-        <Tile className="flex flex-col justify-between" >
+        {/* Refresh action */}
+        <Tile className="flex flex-col justify-between">
           <div>
-            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Manual probe</span>
-            <p className="mt-2 text-sm text-slate-400">Force an immediate health sweep across all targets.</p>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Sync</span>
+            <p className="mt-2 text-sm text-slate-400">Reload the SLA registry and violation stats from the contract.</p>
           </div>
           <button
-            onClick={checkNow}
-            disabled={checking}
+            onClick={refresh}
+            disabled={refreshing}
             className="mt-4 flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold text-[#0B0F1A] transition disabled:opacity-60"
             style={{ background: CYAN, boxShadow: `0 0 24px ${CYAN}44` }}
           >
-            {checking ? 'Probing…' : '⚡ Check now'}
+            {refreshing ? 'Syncing…' : '⚡ Refresh from chain'}
           </button>
         </Tile>
 
