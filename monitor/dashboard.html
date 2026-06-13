@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SLA Watcher Dashboard</title>
+<style>
+  body{font-family:system-ui;max-width:800px;margin:2rem auto;padding:0 1rem;background:#0d1117;color:#c9d1d9}
+  h1{color:#58a6ff}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1rem;margin:1rem 0}
+  .violated{border-color:#f85149} .ok{border-color:#3fb950}
+  button{background:#238636;color:#fff;border:none;padding:.5rem 1rem;border-radius:6px;cursor:pointer}
+  input{background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:.4rem;border-radius:4px;margin:.2rem}
+</style>
+</head>
+<body>
+<h1>SLA Watcher</h1>
+<div class="card">
+  <h3>Register SLA</h3>
+  <input id="svc" placeholder="Service name">
+  <input id="promise" placeholder="SLA promise">
+  <input id="url" placeholder="Status URL">
+  <button onclick="register()">Register</button>
+</div>
+<div id="slas"></div>
+<script>
+const API = 'http://localhost:4000'; // GenLayer local node
+async function register(){
+  const body = {service_name:document.getElementById('svc').value,sla_promise:document.getElementById('promise').value,status_url:document.getElementById('url').value};
+  const r = await fetch(`${API}/call`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'register_sla',args:body})});
+  const d = await r.json(); alert('Registered: '+JSON.stringify(d));
+}
+async function checkViolation(key){
+  const r = await fetch(`${API}/call`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'check_violation',args:{sla_key:key}})});
+  const d = await r.json(); alert(JSON.stringify(d));
+}
+</script>
+</body>
+</html>
