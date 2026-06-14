@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Toaster, toast } from 'sonner'
-import { read, write, CONTRACT } from './genlayer'
+import { read, write, CONTRACT, connectWallet, isWalletConnected } from './genlayer'
 
 const BG = '#0B0F1A'
 const CYAN = '#22D3EE'
@@ -103,6 +103,19 @@ function App() {
   const [registering, setRegistering] = useState(false)
   const [checkingKey, setCheckingKey] = useState<string | null>(null)
   const [form, setForm] = useState({ name: '', promise: '', url: '' })
+  const [wallet, setWallet] = useState<string | null>(null)
+
+  const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
+
+  async function handleConnect() {
+    try {
+      const addr = await connectWallet()
+      setWallet(addr)
+      toast.success(`Wallet connected · ${shortAddr(addr)}`)
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Failed to connect wallet')
+    }
+  }
 
   const uptime = useMemo(() => {
     const total = chainStats.total_slas
@@ -239,6 +252,13 @@ function App() {
           <span className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-widest text-slate-400">live</span>
         </div>
         <code className="ml-auto hidden rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 font-mono text-[11px] text-slate-400 sm:block">{CONTRACT}</code>
+        <button
+          onClick={handleConnect}
+          className="ml-auto rounded-lg px-4 py-1.5 text-sm font-bold text-[#0B0F1A] transition sm:ml-0"
+          style={{ background: CYAN, boxShadow: `0 0 16px ${CYAN}55` }}
+        >
+          {wallet ? shortAddr(wallet) : isWalletConnected() ? 'Connected' : 'Connect Wallet'}
+        </button>
       </div>
 
       {/* BENTO GRID */}
