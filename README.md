@@ -15,11 +15,6 @@ SLA monitoring requires live data + interpretation:
 
 **GenLayer (Bradbury):** `0x31B1A2Add1bc5D15bBE53Ad684aaf86a970ce8AC`
 
-## Test result
-
-Registered SLA: "OpenAI API — 99.9% uptime"
-→ ✅ SLA stored correctly, status_url = https://status.openai.com
-
 ## Structure
 
 ```
