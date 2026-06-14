@@ -27,9 +27,3 @@ Providers stake a bond. If SLA is violated, bond is partially slashed to compens
 genlayer deploy --contract /Users/rivale/SLAWatcher/monitor/sla_watcher.py
 ```
 
-## Test
-
-```bash
-genlayer call --method register_sla --args '{"service_name":"Acme Cloud","sla_promise":"99.9% uptime monthly","status_url":"https://status.acme.io"}'
-genlayer call --method check_violation --args '{"sla_key":"sla_0"}'
-```
