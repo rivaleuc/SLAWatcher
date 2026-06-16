@@ -4,8 +4,8 @@
 
 SLAWatcher turns a plain-language service-level promise ("99.9% uptime, no degraded performance") into something a decentralized network can monitor and adjudicate. Anyone registers a service with its status URL, then anyone can trigger a check: validators independently render the live status page, an LLM decides whether the SLA is currently violated, and the verdict is recorded on chain. A violation count drives a downstream penalty pool — no trusted monitoring vendor in the loop.
 
-- **Contract (Bradbury, chain 4221):** `0x31B1A2Add1bc5D15bBE53Ad684aaf86a970ce8AC`
-- **Explorer:** https://explorer-bradbury.genlayer.com/contract/0x31B1A2Add1bc5D15bBE53Ad684aaf86a970ce8AC
+- **Contract (Bradbury, chain 4221):** `0xF24c6d7d878Fe52B1ce9f865ecEEE400882582D0`
+- **Explorer:** https://explorer-bradbury.genlayer.com/contract/0xF24c6d7d878Fe52B1ce9f865ecEEE400882582D0
 - **Live app:** https://slawatcher.pages.dev
 
 ## What it does

@@ -12,6 +12,7 @@ type Sla = {
   promise: string
   statusUrl: string
   violated: boolean
+  status: string
   lastReason: string
   checks: number
 }
@@ -24,6 +25,7 @@ function slaFrom(i: number, s: any): Sla {
     promise: String(s?.promise ?? ''),
     statusUrl: String(s?.status_url ?? ''),
     violated: Boolean(s?.violated),
+    status: String(s?.status ?? 'unknown'),
     lastReason: String(s?.last_reason ?? ''),
     checks: Number(s?.checks ?? 0),
   }
@@ -54,24 +56,6 @@ function Gauge({ value }: { value: number }) {
   )
 }
 
-function Spark({ data }: { data: number[] }) {
-  const max = Math.max(...data, 1)
-  const pts = data.map((d, i) => `${(i / (data.length - 1)) * 100},${40 - (d / max) * 36}`).join(' ')
-  const area = `0,40 ${pts} 100,40`
-  return (
-    <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="h-full w-full">
-      <defs>
-        <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={CYAN} stopOpacity="0.45" />
-          <stop offset="100%" stopColor={CYAN} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <polygon points={area} fill="url(#sg)" />
-      <polyline points={pts} fill="none" stroke={CYAN} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
-    </svg>
-  )
-}
-
 const SEV_COLOR: Record<Incident['sev'], string> = { crit: '#F43F5E', warn: '#F59E0B', info: '#38BDF8' }
 
 function Tile({ className = '', children, label, action }: { className?: string; children: React.ReactNode; label?: string; action?: React.ReactNode }) {
@@ -97,7 +81,6 @@ function App() {
   const [slas, setSlas] = useState<Sla[]>([])
   const [chainStats, setChainStats] = useState({ total_slas: 0, violations: 0 })
   const [incidents, setIncidents] = useState<Incident[]>([])
-  const [latency, setLatency] = useState<number[]>([62, 70, 58, 91, 74, 66, 102, 80, 61, 73, 69, 88])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [registering, setRegistering] = useState(false)
@@ -122,13 +105,6 @@ function App() {
     if (!total) return 100
     return ((total - chainStats.violations) / total) * 100
   }, [chainStats])
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      setLatency((prev) => [...prev.slice(1), 50 + Math.round(Math.random() * 80)])
-    }, 2200)
-    return () => clearInterval(t)
-  }, [])
 
   async function loadSlas(silent = false) {
     if (!silent) setLoading(true)
@@ -268,7 +244,7 @@ function App() {
           <div className="flex flex-1 flex-col items-center justify-center py-4">
             <Gauge value={Number(uptime.toFixed(3))} />
             <div className="mt-6 grid w-full grid-cols-3 gap-3 text-center">
-              {[['Avg latency', `${latency[latency.length - 1]}ms`], ['SLAs', `${chainStats.total_slas}`], ['Violations', `${chainStats.violations}`]].map(([k, v]) => (
+              {[['Healthy', `${Math.max(chainStats.total_slas - chainStats.violations, 0)}`], ['SLAs', `${chainStats.total_slas}`], ['Violations', `${chainStats.violations}`]].map(([k, v]) => (
                 <div key={k} className="rounded-xl border border-white/5 bg-black/20 py-3">
                   <div className="text-xl font-bold text-white tabular-nums">{v}</div>
                   <div className="text-[10px] uppercase tracking-wider text-slate-500">{k}</div>
@@ -298,22 +274,11 @@ function App() {
                     <span className="h-2 w-2 rounded-full" style={{ background: s.violated ? '#F43F5E' : '#34D399', boxShadow: `0 0 8px ${s.violated ? '#F43F5E' : '#34D399'}` }} />
                     <span className="font-mono text-[11px] text-slate-300">{s.service}</span>
                   </span>
-                  <span className="text-[10px] tabular-nums text-slate-500">{checkingKey === s.key ? 'checking…' : s.violated ? 'violated' : `${s.checks} checks`}</span>
+                  <span className="text-[10px] tabular-nums text-slate-500">{checkingKey === s.key ? 'checking…' : s.status !== 'unknown' ? `${s.status} · ${s.checks} checks` : `${s.checks} checks`}</span>
                 </button>
               ))}
             </div>
           )}
-        </Tile>
-
-        {/* Latency sparkline */}
-        <Tile className="sm:col-span-2" label="Latency p50 — live">
-          <div className="h-24 w-full">
-            <Spark data={latency} />
-          </div>
-          <div className="mt-2 flex items-center justify-between font-mono text-[11px] text-slate-500">
-            <span>now {latency[latency.length - 1]}ms</span>
-            <span style={{ color: CYAN }}>peak {Math.max(...latency)}ms</span>
-          </div>
         </Tile>
 
         {/* Register SLA action */}

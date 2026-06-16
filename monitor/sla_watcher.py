@@ -22,6 +22,7 @@ class SLAWatcher(gl.Contract):
             "status_url": str(status_url).strip(),
             "violated": False,
             "last_reason": "",
+            "status": "unknown",
             "checks": 0,
         }
         self.slas[key] = json.dumps(sla)
@@ -39,6 +40,7 @@ class SLAWatcher(gl.Contract):
         sla["checks"] += 1
         sla["violated"] = verdict["violated"]
         sla["last_reason"] = verdict["reason"]
+        sla["status"] = verdict["status"]
         if verdict["violated"]:
             self.violation_count += u256(1)
         self.slas[sla_key] = json.dumps(sla)
@@ -73,18 +75,30 @@ RULES:
 Reply ONLY valid JSON:
 {{"violated": true/false, "reason": "<brief explanation>"}}"""
             raw = gl.nondet.exec_prompt(prompt, response_format="json")
-            if isinstance(raw, dict):
-                return json.dumps(raw)
-            return str(raw).strip()
+            data = raw if isinstance(raw, dict) else json.loads(str(raw).strip())
+
+            # Deterministic normalization + anchor: derive `status` from the
+            # boolean so honest leaders always satisfy the validator invariant.
+            violated = bool(data.get("violated"))
+            reason = str(data.get("reason", "")).strip()
+            if len(reason) < 8:
+                reason = f"status page indicates service is {'breached' if violated else 'healthy'}"
+            status = "breached" if violated else "healthy"
+            return json.dumps({"violated": violated, "reason": reason, "status": status})
 
         def validator_fn(leader_result) -> bool:
             if not isinstance(leader_result, gl.vm.Return):
                 return False
             try:
                 data = json.loads(leader_result.calldata)
-                if not isinstance(data.get("violated"), bool):
+                violated = data.get("violated")
+                if not isinstance(violated, bool):
                     return False
-                if not isinstance(data.get("reason"), str):
+                reason = data.get("reason")
+                if not isinstance(reason, str) or len(reason.strip()) < 8:
+                    return False
+                # Cross-field invariant (the ANCHOR): status mirrors violated.
+                if data.get("status") != ("breached" if violated else "healthy"):
                     return False
                 return True
             except Exception:
@@ -105,7 +119,7 @@ Reply ONLY valid JSON:
         if key not in self.slas:
             return {"checked": False}
         sla = json.loads(self.slas[key])
-        return {"checked": True, "violated": sla["violated"], "reason": sla["last_reason"]}
+        return {"checked": True, "violated": sla["violated"], "reason": sla["last_reason"], "status": sla.get("status", "unknown")}
 
     @gl.public.view
     def stats(self) -> dict:
